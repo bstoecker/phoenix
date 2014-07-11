@@ -5,10 +5,6 @@ defmodule Phoenix.Router.Path do
   def join([]), do: ""
   def join(split_path), do: Elixir.Path.join(split_path)
 
-  def split_from_conn(conn) do
-    conn.path_info |> join |> split
-  end
-
   @doc """
   Returns the AST binding of the given variable with var_name
 
@@ -42,7 +38,7 @@ defmodule Phoenix.Router.Path do
     ["pages"]
 
     iex> Path.matched_arg_list_with_ast_bindings("/")
-    [""]
+    []
 
   Generated as:
       def match(:get, ["users", user_id, "comments", id])
@@ -54,7 +50,7 @@ defmodule Phoenix.Router.Path do
     |> split
     |> Enum.chunk(2, 1, [nil])
     |> Enum.map(fn [part, next] -> part_to_ast_binding(part, next) end)
-    |> Enum.filter(fn part -> part end)
+    |> Enum.filter(fn part -> not(part in [nil, ""]) end)
   end
   defp part_to_ast_binding(<<"*" <> _splat_name>>, nil), do: nil
   defp part_to_ast_binding(<<":" <> param_name>>, <<"*" <> splat_name>>) do
@@ -111,11 +107,15 @@ defmodule Phoenix.Router.Path do
   end
 
   @doc """
-  Builds String Path replacing named params with keyword list of values
+  Builds String Path replacing named params with keyword list of values,
+  unused parameters are used to construct the query string.
 
   # Examples
     iex> Path.build("users/:user_id/comments/:id", user_id: 1, id: 123)
     "/users/1/comments/123"
+
+    iex> Path.build("users/:user_id/comments/:id", user_id: 1, id: 123, highlight: "abc")
+    "/users/1/comments/123?highlight=abc"
 
     iex> Path.build("pages/about", [])
     "/pages/about"
@@ -123,15 +123,29 @@ defmodule Phoenix.Router.Path do
   """
   def build(path, []), do: ensure_leading_slash(path)
   def build(path, param_values) do
+    param_names = param_names(path)
+
     path
-    |> param_names
-    |> replace_param_names_with_values(param_values, path)
+    |> replace_param_names_with_values(param_names, param_values)
+    |> construct_query_string(param_names, param_values)
     |> ensure_leading_slash
   end
-  defp replace_param_names_with_values(param_names, param_values, path) do
+  defp replace_param_names_with_values(path, param_names, param_values) do
     Enum.reduce param_names, path, fn param_name, path_acc ->
       value = param_values[String.to_atom(param_name)] |> to_string
       String.replace(path_acc, ~r/[\:\*]{1}#{param_name}/, value)
+    end
+  end
+  defp construct_query_string(path, param_names, param_values) do
+    query_params = \
+      Enum.filter(param_values, fn {param_name, _} ->
+        !Enum.member?(param_names, to_string(param_name))
+      end)
+
+    if Enum.empty?(query_params) do
+      path
+    else
+      path <> "?" <> Plug.Conn.Query.encode(query_params)
     end
   end
 
@@ -139,15 +153,20 @@ defmodule Phoenix.Router.Path do
   Builds a URL based on options passed.
 
   # Examples:
-    iex> Path.build_url("/users", "example.com", "https")
-    "https://example.com/users"
-
     iex> Path.build_url("/users", "example.com")
     "http://example.com/users"
 
+    iex> Path.build_url("/users", "example.com", scheme: "https")
+    "https://example.com/users"
+
+    iex> Path.build_url("/users", "example.com", port: 8080)
+    "http://example.com:8080/users"
+
   """
-  def build_url(path, host, scheme \\ "http") do
-    %URI{scheme: scheme, host: host, path: path} |> to_string
+  def build_url(path, host, options \\ []) do
+    scheme = options[:scheme] || "http"
+    port   = options[:port]
+    %URI{scheme: scheme, host: host, path: path, port: port} |> to_string
   end
 
   @doc """

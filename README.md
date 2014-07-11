@@ -7,12 +7,12 @@
 ## Getting started
 
 ### Requirements
-- Elixir v0.14.1
+- Elixir v0.14.2
 
 ### Setup
 1. Install Phoenix
 
-        git clone https://github.com/phoenixframework/phoenix.git && cd phoenix && git checkout v0.2.10 && mix do deps.get, compile
+        git clone https://github.com/phoenixframework/phoenix.git && cd phoenix && git checkout v0.3.0 && mix do deps.get, compile
 
 
 2. Create a new Phoenix application
@@ -31,6 +31,11 @@
         mix phoenix.start
 
 
+When running in production, use protocol consolidation for increased performance:
+
+       MIX_ENV=prod mix compile.protocols
+       MIX_ENV=prod elixir -pa _build/prod/consolidated -S mix phoenix.start
+       
 ### Router example
 
 ```elixir
@@ -58,12 +63,11 @@ end
 defmodule Controllers.Pages do
   use Phoenix.Controller
 
-  def show(conn) do
-    if conn.params["page"] in ["admin"] do
-      redirect conn, Router.page_path(page: "unauthorized")
-    else
-      text conn, "Showing page #{conn.params["page"]}"
-    end
+  def show(conn, %{"page" => "admin"}) do
+    redirect conn, Router.page_path(page: "unauthorized")
+  end
+  def show(conn, %{"page" => page}) do
+    render conn, "show", title: "Showing page #{page}"
   end
 
 end
@@ -71,11 +75,11 @@ end
 defmodule Controllers.Users do
   use Phoenix.Controller
 
-  def show(conn) do
-    text conn, "Showing user #{conn.params["id"]}"
+  def show(conn, %{"id" => id}) do
+    text conn, "Showing user #{id}"
   end
 
-  def index(conn) do
+  def index(conn, _params) do
     html conn, """
     <html>
       <body>
@@ -85,6 +89,102 @@ defmodule Controllers.Users do
     """
   end
 end
+```
+
+### Views & Templates
+
+Put simply, Phoenix Views *render* templates. Views also serve as a presentation layer for their templates where functions, alias, imports, etc are in context.
+
+### Rendering from the Controller
+```elixir
+defmodule App.Controllers.Pages do
+  use Phoenix.Controller
+
+  def index(conn, _params) do
+    render conn, "index", message: "hello"
+  end
+end
+```
+
+By looking at the controller name `App.Controllers.Pages`, Phoenix will use `App.Views.Pages` to render `lib/app/templates/pages/index.html.eex` within the template `lib/app/templates/layouts/application.html.eex`. Let's break that down: 
+ * `App.Views.Pages` is the module that will render the template (more on that later)
+ * `app` is your application name
+ * `templates` is your configured templates directory. See `lib/app/views.ex`
+ * `pages` is your controller name
+ * `html` is the requested format (more on that later)
+ * `eex` is the default renderer
+ * `application.html` is the layout because `application` is the default layout name and html is the requested format (more on that later)
+
+Every keyword passed to `render` in the controller is available as an assign within the template, so you can use `<%= @message %>` in the eex template that is rendered in the controller example.
+
+You may also create helper functions within your views or layouts. For exemple, the previous controller will use `App.Views.Pages` so you could have : 
+
+```elixir
+defmodule App.Views do
+  defmacro __using__(_options) do
+    quote do
+      use Phoenix.View, templates_root: unquote(Path.join([__DIR__, "templates"]))
+      import unquote(__MODULE__)
+
+      # This block is expanded within all views for aliases, imports, etc
+      alias App.Views
+      
+      def title, do: "Welcome to Phoenix!"
+    end
+  end
+
+  # Functions defined here are available to all other views/templates
+end
+
+defmodule App.Views.Pages
+  use App.Views
+
+  def display(something) do 
+    String.upcase(something)
+  end
+end
+```
+
+Which would allow you to use these functions in your template : `<%= display(@message) %>`, `<%= title %>`
+
+Note that all views extend `App.Views`, allowing you to define functions, aliases, imports, etc available in all templates.
+
+To read more about eex templating, see the [elixir documentation](http://elixir-lang.org/docs/stable/eex/). 
+
+#### More on request format
+
+The template format to render is chosen based on the following priority:
+
+ * `format` query string parameter, ie `?format=json`
+ * The request header `accept` field, ie "text/html"
+ * Fallback to html as default format, therefore rendering `*.html.eex`
+
+Note that the layout and view templates would be chosen by matching conten types, ie `application.[format].eex` would be used to render `show.[format].eex`.
+
+See [this file](https://github.com/elixir-lang/plug/blob/master/lib/plug/mime.types) for a list of supported mime types.
+
+#### More on layouts
+
+The "Layouts" module name is hardcoded. This means that `App.Views.Layouts` will be used and, by default, will render templates from `lib/app/templates/layouts`.
+
+The layout template can be changed easily from the controller. For example :
+
+```elixir
+defmodule App.Controllers.Pages do
+  use Phoenix.Controller
+
+  def index(conn, _params) do
+    render conn, "index", message: "hello", layout: "plain"
+  end
+end
+```
+
+To render the template's content inside a layout, use the assign `<%= @inner %>` that will be generated for you.
+
+You may also omit using a template with the following : 
+
+```elixir
+render "index", message: "hello", layout: nil
 ```
 
 ### Configuration
@@ -152,6 +252,40 @@ Example:
 Path.expand("../../../some/path/to/ssl/key.pem", __DIR__)
 ```
 
+#### Configuration for Sessions
+
+Phoenix supports a session cookie store that can be easily configured. Just
+add the following configuration settings to your application's config module:
+
+```elixir
+# your_app/lib/config/prod.ex
+defmodule YourApp.Config.Prod do
+  use YourApp.Config
+
+  config :plugs, cookies: true
+
+  config :cookies, key: "_your_app_key", secret: "valid_secret"
+end
+```
+
+Then you can access session data from your application controllers.
+NOTE: that `:key` and `:secret` are required options.
+
+Example:
+
+```elixir
+defmodule Controllers.Pages do
+  use Phoenix.Controller
+
+  def show(conn, _params) do
+    conn = fetch_session(conn) |> put_session(:foo, "bar")
+    foo = get_session(conn, :foo)
+
+    text conn, foo
+  end
+end
+```
+
 ### Mix Tasks
 
 ```console
@@ -172,17 +306,24 @@ from the `priv/static/` directory of your application.
 
 ## Documentation
 
-API documentaion is available at [http://api.phoenixframework.org/](http://api.phoenixframework.org/)
+API documentation is available at [http://api.phoenixframework.org/](http://api.phoenixframework.org/)
 
 
 ## Development
 
 There are no guidelines yet. Do what feels natural. Submit a bug, join a discussion, open a pull request.
 
+### Building phoenix.coffee
+
+```bash
+$ coffee -o priv/static/js -cw priv/src/static/cs
+```
+
+
 ### Building documentation
 
 1. Clone [docs repository](https://github.com/phoenixframework/docs) into `../docs`. Relative to your `phoenix` directory.
-2. Run `mix run release_docs.exs` in `phoenix` directory.
+2. Run `MIX_ENV=docs mix run release_docs.exs` in `phoenix` directory.
 3. Change directory to `../docs`.
 4. Commit and push docs.
 
@@ -196,6 +337,7 @@ There are no guidelines yet. Do what feels natural. Submit a bug, join a discuss
   - [ ] Member/Collection resource  routes
 - Configuration
   - [x] Environment based configuration with ExConf
+  - [ ] ExConf integreation with config.exs
 - Middleware
   - [x] Plug Based Connection handling
   - [x] Code Reloading
@@ -204,10 +346,12 @@ There are no guidelines yet. Do what feels natural. Submit a bug, join a discuss
 - Controllers
   - [x] html/json/text helpers
   - [x] redirects
+  - [ ] Plug layer for action hooks
   - [x] Error page handling
   - [ ] Error page handling per env
 - Views
-  - [ ] Precompiled View handling
+  - [x] Precompiled View handling
+  - [ ] I18n
 - Realtime
   - [x] Websocket multiplexing/channels
 

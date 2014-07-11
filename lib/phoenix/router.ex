@@ -3,6 +3,7 @@ defmodule Phoenix.Router do
   alias Phoenix.Router.Options
   alias Phoenix.Adapters.Cowboy
   alias Phoenix.Plugs.Parsers
+  alias Phoenix.Config
 
   defmacro __using__(plug_adapter_options \\ []) do
     quote do
@@ -13,7 +14,7 @@ defmodule Phoenix.Router do
       @before_compile unquote(__MODULE__)
       use Plug.Builder
 
-      plug Plug.Parsers, parsers: [:urlencoded, :multipart, Parsers.JSON, Parsers.Fallback]
+      plug Plug.Parsers, parsers: [:urlencoded, :multipart, Parsers.JSON], accept: ["*/*"]
       plug Plugs.ErrorHandler, from: __MODULE__
 
       @options unquote(plug_adapter_options)
@@ -22,8 +23,18 @@ defmodule Phoenix.Router do
 
   defmacro __before_compile__(_env) do
     quote do
-      plug Plugs.CodeReloader, from: __MODULE__
-      plug Plugs.Logger, from: __MODULE__
+      config = Config.for(__MODULE__)
+      plug Plugs.Logger, config.logger[:level]
+      if config.plugs[:code_reload] do
+        plug Plugs.CodeReloader
+      end
+      if config.plugs[:cookies] do
+        key = Keyword.fetch!(config.cookies, :key)
+        secret = Keyword.fetch!(config.cookies, :secret)
+
+        plug Plug.Session, store: :cookie, key: key, secret: secret
+      end
+
       plug :dispatch
 
       def dispatch(conn, []) do
@@ -59,11 +70,8 @@ defmodule Phoenix.Router do
   end
 
   def perform_dispatch(conn, router) do
-    alias Phoenix.Router.Path
-    conn        = Plug.Conn.fetch_params(conn)
-    http_method = conn.method |> String.downcase
-    split_path  = Path.split_from_conn(conn)
+    conn = Plug.Conn.fetch_params(conn)
 
-    apply(router, :match, [conn, http_method, split_path])
+    router.match(conn, conn.method, conn.path_info)
   end
 end

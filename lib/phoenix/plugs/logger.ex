@@ -1,10 +1,9 @@
 defmodule Phoenix.Plugs.Logger do
-  alias Phoenix.Config
 
   def init(opts), do: opts
 
-  def call(conn, from: module) do
-    log(conn, Config.for(module).logger[:level])
+  def call(conn, level) do
+    log(conn, level)
 
     conn
   end

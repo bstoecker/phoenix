@@ -1,4 +1,6 @@
 defmodule Phoenix.Plugs.Parsers.JSON do
+  import Plug.Conn
+
   @moduledoc """
   Parses JSON request body.
   """
@@ -15,12 +17,12 @@ defmodule Phoenix.Plugs.Parsers.JSON do
     end
   end
 
-  import Plug.Conn
-  alias Plug.Conn
 
   def parse(conn, "application", "json", _headers, opts) do
     {:ok, body, conn} = read_body(conn, opts)
     case Jazz.decode(body) do
+      {:ok, terms} when is_list(terms)->
+        {:ok, %{"_json" => terms}, conn}
       {:ok, terms} ->
         {:ok, terms, conn}
       _ ->
